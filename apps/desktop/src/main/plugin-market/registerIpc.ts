@@ -1,15 +1,15 @@
 import os from 'node:os';
 
-import { BrowserWindow, ipcMain } from 'electron';
+import { ipcMain } from 'electron';
 
 import { isIpcError } from '../../shared/ipc-errors.js';
 import type { GhostManifest } from '../../shared/ghost.js';
-import { setGhostUninstallLedgerPreparer } from '../cindy-brain/index.js';
-import { createLogger } from '../logger.js';
 import {
-  assertTrustedAppRendererEvent,
-  isTrustedAppRendererWindow,
-} from '../security/trustedAppRenderer.js';
+  sendToTrustedAppWindows,
+  setGhostUninstallLedgerPreparer,
+} from '../cindy-brain/index.js';
+import { createLogger } from '../logger.js';
+import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { requireObject, requireString, throwIpcError } from '../utils/ipcValidate.js';
 import { parseMarketSource } from './sources/parse.js';
 import { PluginMarketService } from './service.js';
@@ -26,10 +26,7 @@ function service(): PluginMarketService {
 
 function signalRemovalNoticeAvailable(): void {
   if (!service().hasPendingRemovalNotice()) return;
-  for (const window of BrowserWindow.getAllWindows()) {
-    if (!isTrustedAppRendererWindow(window)) continue;
-    window.webContents.send(REMOVAL_NOTICE_AVAILABLE_CHANNEL);
-  }
+  sendToTrustedAppWindows(REMOVAL_NOTICE_AVAILABLE_CHANNEL, undefined);
 }
 
 async function snapshotAndSignalRemovalNotice() {

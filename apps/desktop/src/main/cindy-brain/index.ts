@@ -1740,7 +1740,7 @@ export const GHOST_UNREAD_SNAPSHOT_CHANNEL = 'ghosts:unread-snapshot';
  * 出站推送与入站 IPC 是同一道授权边界,不能只守一边(codex review)。
  * 判据复用 `isTrustedAppRendererWindow`,与 `ghosts:unread` 同步读那道闸同源。
  */
-function sendToTrustedAppWindows(channel: string, payload: unknown): void {
+export function sendToTrustedAppWindows(channel: string, payload: unknown): void {
   BrowserWindow.getAllWindows().forEach((window) => {
     if (window.isDestroyed()) return;
     if (!isTrustedAppRendererWindow(window)) return;

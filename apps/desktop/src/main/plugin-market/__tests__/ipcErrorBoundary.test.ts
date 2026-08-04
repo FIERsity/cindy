@@ -42,11 +42,12 @@ describe('Plugin Market IPC error boundary', () => {
     expect(consumeBody).toContain('service().consumeRemovalNotice()');
 
     const signalStart = registerSource.indexOf('function signalRemovalNoticeAvailable()');
-    const signalEnd = registerSource.indexOf('\n}\n\nasync function snapshotAndSignalRemovalNotice', signalStart);
+    const signalEnd = registerSource.indexOf('\n}\n', signalStart);
     const signalBody = registerSource.slice(signalStart, signalEnd);
-    expect(signalBody).toContain('BrowserWindow.getAllWindows()');
-    expect(signalBody).toContain('if (!isTrustedAppRendererWindow(window)) continue;');
-    expect(signalBody).toContain('window.webContents.send(REMOVAL_NOTICE_AVAILABLE_CHANNEL);');
+    // 出站广播必须走共享的可信窗口收口(isDestroyed + isTrustedAppRendererWindow
+    // 判据都在 helper 里),不允许退回手写 getAllWindows 循环。
+    expect(signalBody).toContain('sendToTrustedAppWindows(REMOVAL_NOTICE_AVAILABLE_CHANNEL');
+    expect(signalBody).not.toContain('getAllWindows');
   });
 
   it('refuses renderer-supplied local paths and only grants them via the picker', () => {

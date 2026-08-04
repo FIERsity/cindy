@@ -56,6 +56,9 @@ export class PluginMarketApi {
         }
       }
       if (!response.nextCursor) {
+        // 在架优先(契约:通告与**任一页** plugins 有交集即作废)的作用域是
+        // 未经 owner 过滤的完整目录,必须留在聚合层;挪到 service 的 owner
+        // 视角之后,owner 不可见但在架的插件会被错误放行清理。
         const removals = [...removalsByPluginId.values()].filter((removal) => {
           if (!seen.has(removal.pluginId)) return true;
           log.warn('market removal ignored because plugin is active', {

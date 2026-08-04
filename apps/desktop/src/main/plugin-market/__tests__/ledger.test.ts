@@ -70,20 +70,6 @@ describe('PluginMarketLedger', () => {
     ).toBe(false);
   });
 
-  it('can mark a server removal without changing defaultInstall opt-outs', () => {
-    const { ledger } = harness();
-    ledger.upsertInstallation(record());
-
-    ledger.markRemoved('cindy-test', 'user-a', {
-      recordDefaultInstallOptOut: false,
-    });
-
-    expect(ledger.installationForGhost('cindy-test')?.installed).toBe(false);
-    expect(
-      ledger.isDefaultInstallSuppressed('user-a', `c${'a'.repeat(24)}`),
-    ).toBe(false);
-  });
-
   it('fails closed to an empty ledger for malformed or future data', () => {
     const { filePath, ledger } = harness();
     fs.mkdirSync(path.dirname(filePath), { recursive: true });

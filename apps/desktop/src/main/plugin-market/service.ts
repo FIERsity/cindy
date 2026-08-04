@@ -271,6 +271,14 @@ interface LocalInstallSnapshot {
 }
 
 /**
+ * 清理通告 pending 汇总的 owner 隔离键。**故意不含 generation**：同一 owner
+ * 重新登录（换代）后，未消费的通知仍应展示，不随会话代际作废。
+ */
+function removalNoticeKey(owner: ActiveAppSession): string {
+  return `${owner.mode}:${owner.dataOwnerId}`;
+}
+
+/**
  * Plugin 市场的 main 端协调器。远程不可用时不碰本地目录；安装写路径必须依次
  * 通过 protocol parser、下载大小/SHA 校验、Ghost runtime validator 和原子换目录。
  */
@@ -379,17 +387,16 @@ export class PluginMarketService {
 
   /** 按当前 owner 消费一次清理汇总，避免组织插件名跨账号泄露。 */
   consumeRemovalNotice(): PluginRemovalUserNotice | null {
-    const owner = captureMarketOwner();
-    const key = `${owner.mode}:${owner.dataOwnerId}`;
+    const key = removalNoticeKey(captureMarketOwner());
     const notice = this.pendingRemovalNotices.get(key) ?? null;
     if (notice) this.pendingRemovalNotices.delete(key);
     return notice;
   }
 
   hasPendingRemovalNotice(): boolean {
+    if (this.pendingRemovalNotices.size === 0) return false;
     try {
-      const owner = captureMarketOwner();
-      return this.pendingRemovalNotices.has(`${owner.mode}:${owner.dataOwnerId}`);
+      return this.pendingRemovalNotices.has(removalNoticeKey(captureMarketOwner()));
     } catch {
       return false;
     }
@@ -1339,52 +1346,74 @@ export class PluginMarketService {
     owner: ActiveAppSession,
     ledger: PluginMarketLedger,
   ): Promise<void> {
+    if (removals.length === 0) return;
+    const skip = (removal: PluginRemovalNotice, reason: string): undefined => {
+      log.info('server plugin removal skipped', {
+        pluginId: removal.pluginId,
+        ghostId: removal.ghostId,
+        reason,
+      });
+      return undefined;
+    };
+    // 五道闸的账本侧判定。锁外先用一次性快照预筛(绝大多数通告在这里就被
+    // 挡下,不必为它们各自重读账本/进互斥段);幸存候选进锁后**必须**用
+    // installationForGhost 即时复检——快照在等锁期间可能过时,权威判定只认锁内。
+    const ledgerGateReason = (
+      record: PluginMarketInstallationRecord | null | undefined,
+      removal: PluginRemovalNotice,
+    ): string | null => {
+      if (!record) return 'ledger-record-missing';
+      if (record.pluginId !== removal.pluginId) return 'plugin-id-mismatch';
+      if (record.source !== 'market' && record.source !== 'legacy-adopted') {
+        return 'non-server-source';
+      }
+      if (!record.installed) return 'already-not-installed';
+      if (record.scope !== 'organization') return 'non-organization-scope';
+      return null;
+    };
+    const snapshot = ledger.read().installations;
+    // runtime 在场判定与取名共用一次目录扫描(list 会读每个包的 manifest 与
+    // 图标),首个幸存候选时才建;清理会改目录,但每条清理都在自己的互斥段里
+    // 由账本复检把关,这张表只回答"清理前它在不在场、叫什么"。
+    let ghostsById: Map<string, InstalledGhost> | null = null;
     const removedNames: Array<string | null> = [];
     for (const removal of removals) {
+      if (removal.action !== 'purge') {
+        skip(removal, 'unsupported-action');
+        continue;
+      }
+      const prefilterReason = ledgerGateReason(snapshot[removal.ghostId], removal);
+      if (prefilterReason) {
+        skip(removal, prefilterReason);
+        continue;
+      }
       try {
         const removed = await this.withMutation(removal.pluginId, async () => {
           requireSameMarketOwner(owner);
-          const record = ledger.installationForGhost(removal.ghostId);
-          const skip = (reason: string): undefined => {
-            log.info('server plugin removal skipped', {
-              pluginId: removal.pluginId,
-              ghostId: removal.ghostId,
-              reason,
-            });
-            return undefined;
-          };
-          if (!record) return skip('ledger-record-missing');
-          if (record.pluginId !== removal.pluginId) return skip('plugin-id-mismatch');
-          if (record.source !== 'market' && record.source !== 'legacy-adopted') {
-            return skip('non-server-source');
-          }
-          if (!record.installed) return skip('already-not-installed');
-          if (record.scope !== 'organization') return skip('non-organization-scope');
+          const reason = ledgerGateReason(
+            ledger.installationForGhost(removal.ghostId),
+            removal,
+          );
+          if (reason) return skip(removal, reason);
 
-          switch (removal.action) {
-            case 'purge':
-              break;
-            default:
-              return skip('unsupported-action');
-          }
+          ghostsById ??= new Map(
+            getGhostManager().list().map((ghost) => [ghost.manifest.id, ghost]),
+          );
+          const installed = ghostsById.get(removal.ghostId);
+          if (!installed) return skip(removal, 'runtime-not-installed');
 
-          const installed = getGhostManager()
-            .list()
-            .find((ghost) => ghost.manifest.id === removal.ghostId);
-          if (!installed) return skip('runtime-not-installed');
-
-          await uninstallGhostAndCleanup(record.ghostId, { skipMarketLedger: true });
+          await uninstallGhostAndCleanup(removal.ghostId, { skipMarketLedger: true });
           await this.withCapturedLedgerMutation(ledger, () => {
-            ledger.markRemoved(record.ghostId, null, {
-              recordDefaultInstallOptOut: false,
-            });
+            // userId=null 即不写退订(拍板:purge 对 defaultInstallOptOuts 只读,
+            // 不写也不清;重新上架后按用户既有退订状态决定是否自动装回)。
+            ledger.markRemoved(removal.ghostId, null);
           });
           log.info('server plugin removal applied', {
             pluginId: removal.pluginId,
             ghostId: removal.ghostId,
           });
           return {
-            name: stripDirectionalControls(installed.manifest.name).slice(0, 200) || null,
+            name: stripDirectionalControls(installed.manifest.name) || null,
           };
         });
         if (removed) removedNames.push(removed.name);
@@ -1397,12 +1426,12 @@ export class PluginMarketService {
       }
     }
     if (removedNames.length === 0) return;
-    const key = `${owner.mode}:${owner.dataOwnerId}`;
-    const pending = this.pendingRemovalNotices.get(key);
-    const count = (pending?.count ?? 0) + removedNames.length;
+    const key = removalNoticeKey(owner);
+    const count =
+      (this.pendingRemovalNotices.get(key)?.count ?? 0) + removedNames.length;
     this.pendingRemovalNotices.set(key, {
       count,
-      name: count === 1 ? (pending?.name ?? removedNames[0] ?? null) : null,
+      name: count === 1 ? (removedNames[0] ?? null) : null,
     });
   }
 

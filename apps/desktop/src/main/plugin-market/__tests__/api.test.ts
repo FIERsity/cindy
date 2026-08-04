@@ -44,20 +44,24 @@ function removal(pluginId: string, ghostId: string) {
   };
 }
 
+/** 依序吐出各页响应（自动补 schemaVersion: 2）的 fetcher mock。 */
+function pagedFetcher(...pages: Array<Record<string, unknown>>) {
+  const fetcher = vi.fn();
+  for (const page of pages) {
+    fetcher.mockResolvedValueOnce({ schemaVersion: 2, ...page });
+  }
+  return fetcher;
+}
+
 describe('PluginMarketApi', () => {
   it('paginates with opaque cursors and deduplicates repeated ids', async () => {
-    const fetcher = vi
-      .fn()
-      .mockResolvedValueOnce({
-        schemaVersion: 2,
-        plugins: [summary(PLUGIN_A, 'alpha')],
-        nextCursor: PLUGIN_A,
-      })
-      .mockResolvedValueOnce({
-        schemaVersion: 2,
+    const fetcher = pagedFetcher(
+      { plugins: [summary(PLUGIN_A, 'alpha')], nextCursor: PLUGIN_A },
+      {
         plugins: [summary(PLUGIN_A, 'alpha'), summary(PLUGIN_B, 'beta')],
         nextCursor: null,
-      });
+      },
+    );
     const api = new PluginMarketApi(fetcher);
 
     await expect(api.listAll()).resolves.toMatchObject({
@@ -67,43 +71,42 @@ describe('PluginMarketApi', () => {
     expect(fetcher.mock.calls[1]?.[0]).toContain(`cursor=${PLUGIN_A}`);
   });
 
-  it('deduplicates removals by pluginId across pages', async () => {
-    const fetcher = vi
-      .fn()
-      .mockResolvedValueOnce({
-        schemaVersion: 2,
+  it('deduplicates removals by pluginId across pages keeping the first-seen notice', async () => {
+    const fetcher = pagedFetcher(
+      {
         plugins: [],
         removals: [removal(PLUGIN_A, 'alpha')],
         nextCursor: PLUGIN_A,
-      })
-      .mockResolvedValueOnce({
-        schemaVersion: 2,
+      },
+      {
         plugins: [],
-        removals: [removal(PLUGIN_A, 'alpha'), removal(PLUGIN_B, 'beta')],
+        removals: [
+          // 同 pluginId 但内容不同的后到通告必须被丢弃(保首见)。
+          { ...removal(PLUGIN_A, 'alpha'), removedAt: '2026-08-04T00:00:00.000Z' },
+          removal(PLUGIN_B, 'beta'),
+        ],
         nextCursor: null,
-      });
+      },
+    );
 
     await expect(new PluginMarketApi(fetcher).listAll()).resolves.toMatchObject({
       plugins: [],
-      removals: [{ pluginId: PLUGIN_A }, { pluginId: PLUGIN_B }],
+      removals: [
+        { pluginId: PLUGIN_A, removedAt: '2026-08-03T08:00:00.000Z' },
+        { pluginId: PLUGIN_B },
+      ],
     });
   });
 
   it('keeps active plugins over conflicting removals across pages', async () => {
-    const fetcher = vi
-      .fn()
-      .mockResolvedValueOnce({
-        schemaVersion: 2,
+    const fetcher = pagedFetcher(
+      {
         plugins: [],
         removals: [removal(PLUGIN_A, 'alpha'), removal(PLUGIN_B, 'beta')],
         nextCursor: PLUGIN_A,
-      })
-      .mockResolvedValueOnce({
-        schemaVersion: 2,
-        plugins: [summary(PLUGIN_A, 'alpha')],
-        removals: [],
-        nextCursor: null,
-      });
+      },
+      { plugins: [summary(PLUGIN_A, 'alpha')], removals: [], nextCursor: null },
+    );
 
     await expect(new PluginMarketApi(fetcher).listAll()).resolves.toMatchObject({
       plugins: [{ id: PLUGIN_A }],

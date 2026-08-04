@@ -16,8 +16,8 @@ const mocks = vi.hoisted(() => ({
   warn: vi.fn(),
 }));
 
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: mocks.translate }),
+vi.mock('@/i18n', () => ({
+  i18n: { t: mocks.translate },
 }));
 
 vi.mock('@/lib/secondaryWindow', () => ({
@@ -44,14 +44,16 @@ describe('usePluginRemovalNoticeToast', () => {
       mocks.state.listener = listener;
       return mocks.unsubscribe;
     });
-    (window as unknown as {
-      electronAPI: {
-        pluginMarket: {
-          consumeRemovalNotice: typeof mocks.consume;
-          onRemovalNoticeAvailable: typeof mocks.subscribe;
+    (
+      window as unknown as {
+        electronAPI: {
+          pluginMarket: {
+            consumeRemovalNotice: typeof mocks.consume;
+            onRemovalNoticeAvailable: typeof mocks.subscribe;
+          };
         };
-      };
-    }).electronAPI = {
+      }
+    ).electronAPI = {
       pluginMarket: {
         consumeRemovalNotice: mocks.consume,
         onRemovalNoticeAvailable: mocks.subscribe,
@@ -70,14 +72,12 @@ describe('usePluginRemovalNoticeToast', () => {
     expect(mocks.subscribe.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.consume.mock.invocationCallOrder[0]!,
     );
-    expect(mocks.translate).toHaveBeenCalledWith(
-      'settings.ghosts.market.removalNotice.single',
-      { name: 'Team Plugin' },
-    );
-    expect(mocks.toastInfo).toHaveBeenCalledWith(
-      'settings.ghosts.market.removalNotice.single',
-      { duration: 8000 },
-    );
+    expect(mocks.translate).toHaveBeenCalledWith('settings.ghosts.market.removalNotice.single', {
+      name: 'Team Plugin',
+    });
+    expect(mocks.toastInfo).toHaveBeenCalledWith('settings.ghosts.market.removalNotice.single', {
+      duration: 8000,
+    });
 
     view.unmount();
     expect(mocks.unsubscribe).toHaveBeenCalledOnce();
@@ -91,10 +91,9 @@ describe('usePluginRemovalNoticeToast', () => {
     act(() => mocks.state.listener?.());
 
     await waitFor(() => expect(mocks.toastInfo).toHaveBeenCalledTimes(1));
-    expect(mocks.translate).toHaveBeenCalledWith(
-      'settings.ghosts.market.removalNotice.multiple',
-      { count: 3 },
-    );
+    expect(mocks.translate).toHaveBeenCalledWith('settings.ghosts.market.removalNotice.multiple', {
+      count: 3,
+    });
   });
 
   it('does not let a secondary window consume the main-window notice', () => {
