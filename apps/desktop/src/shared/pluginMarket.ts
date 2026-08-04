@@ -40,6 +40,13 @@ export interface PluginMarketSnapshot {
   customSourceNames: string[];
 }
 
+/** 一轮服务端清理完成后供 Renderer 消费的一次性汇总提示。 */
+export interface PluginRemovalUserNotice {
+  count: number;
+  /** 单条清理时展示插件名；批量清理时为 null，只展示数量。 */
+  name: string | null;
+}
+
 /** 详情额外携带经 Desktop 当前 runtime validator 验证过的完整清单。 */
 export interface PluginMarketDetail extends PluginMarketItem {
   manifest: GhostManifest;

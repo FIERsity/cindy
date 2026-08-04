@@ -70,6 +70,20 @@ describe('PluginMarketLedger', () => {
     ).toBe(false);
   });
 
+  it('can mark a server removal without changing defaultInstall opt-outs', () => {
+    const { ledger } = harness();
+    ledger.upsertInstallation(record());
+
+    ledger.markRemoved('cindy-test', 'user-a', {
+      recordDefaultInstallOptOut: false,
+    });
+
+    expect(ledger.installationForGhost('cindy-test')?.installed).toBe(false);
+    expect(
+      ledger.isDefaultInstallSuppressed('user-a', `c${'a'.repeat(24)}`),
+    ).toBe(false);
+  });
+
   it('fails closed to an empty ledger for malformed or future data', () => {
     const { filePath, ledger } = harness();
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -80,6 +94,28 @@ describe('PluginMarketLedger', () => {
       installations: {},
       defaultInstallOptOuts: {},
     });
+  });
+
+  it('filters a schema-v1 installation record with required fields missing', () => {
+    const { filePath, ledger } = harness();
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(
+      filePath,
+      JSON.stringify({
+        schemaVersion: 1,
+        installations: {
+          'cindy-test': {
+            pluginId: `c${'a'.repeat(24)}`,
+            ghostId: 'cindy-test',
+            source: 'market',
+            installed: true,
+          },
+        },
+        defaultInstallOptOuts: {},
+      }),
+    );
+
+    expect(ledger.installationForGhost('cindy-test')).toBeNull();
   });
 
   it('resolves the owner-scoped path for every operation', () => {

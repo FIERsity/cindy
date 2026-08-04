@@ -1418,6 +1418,10 @@ interface ElectronAPI {
       },
     ) => Promise<{ ghost: import('../shared/ghost').InstalledGhost }>;
     uninstall: (pluginId: string) => Promise<{ ok: true }>;
+    consumeRemovalNotice: () => Promise<
+      import('../shared/pluginMarket').PluginRemovalUserNotice | null
+    >;
+    onRemovalNoticeAvailable: (callback: () => void) => () => void;
     listSources: () => Promise<import('../shared/pluginMarket').MarketSourceSummary[]>;
     pickLocalSource: (
       defaultPath?: string,

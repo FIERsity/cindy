@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 
 import {
   isValidPluginResourceId,
+  type PluginRemovalNotice,
   type VisiblePluginDetail,
   type VisiblePluginSummary,
 } from '@cindy/plugin-protocol';
@@ -23,6 +24,7 @@ import type {
   PluginMarketDetail,
   PluginMarketItem,
   PluginMarketSnapshot,
+  PluginRemovalUserNotice,
 } from '../../shared/pluginMarket.js';
 import {
   customMarketPluginId,
@@ -275,6 +277,7 @@ interface LocalInstallSnapshot {
 export class PluginMarketService {
   private readonly mutations = new Map<string, Promise<unknown>>();
   private ledgerMutation: Promise<void> = Promise.resolve();
+  private readonly pendingRemovalNotices = new Map<string, PluginRemovalUserNotice>();
 
   constructor(
     private readonly api = new PluginMarketApi(),
@@ -322,8 +325,11 @@ export class PluginMarketService {
       };
     }
     let plugins: VisiblePluginSummary[];
+    let removals: PluginRemovalNotice[];
     try {
-      plugins = visiblePluginsForOwner(owner, await this.api.listAll());
+      const catalog = await this.api.listAll();
+      plugins = visiblePluginsForOwner(owner, catalog.plugins);
+      removals = catalog.removals;
     } catch (error) {
       log.warn('market list unavailable', {
         error: error instanceof Error ? error.message : String(error),
@@ -347,6 +353,7 @@ export class PluginMarketService {
     const duplicateGhostIds = combinedDuplicateGhostIds(plugins, customEntries);
     await this.adoptLegacyInstallations(plugins, ledger, owner);
     await this.reconcileRemovedInstallations(ledger, owner);
+    await this.applyServerRemovals(removals, owner, ledger);
     // 自定义目录不完整(某来源暂时不可读)时跳过全部默认安装:此刻的合并冲突
     // 集合缺了坏来源声明的 ghostId,自动安装会在它恢复前抢占所有权。
     if (customComplete) {
@@ -368,6 +375,24 @@ export class PluginMarketService {
       unavailableReason: null,
       customSourceNames,
     };
+  }
+
+  /** 按当前 owner 消费一次清理汇总，避免组织插件名跨账号泄露。 */
+  consumeRemovalNotice(): PluginRemovalUserNotice | null {
+    const owner = captureMarketOwner();
+    const key = `${owner.mode}:${owner.dataOwnerId}`;
+    const notice = this.pendingRemovalNotices.get(key) ?? null;
+    if (notice) this.pendingRemovalNotices.delete(key);
+    return notice;
+  }
+
+  hasPendingRemovalNotice(): boolean {
+    try {
+      const owner = captureMarketOwner();
+      return this.pendingRemovalNotices.has(`${owner.mode}:${owner.dataOwnerId}`);
+    } catch {
+      return false;
+    }
   }
 
   async detail(pluginId: string): Promise<PluginMarketDetail> {
@@ -437,7 +462,7 @@ export class PluginMarketService {
     const ledger = this.ledgerForOwner(owner);
     return this.withMutation(pluginId, async () => {
       requireSameMarketOwner(owner);
-      const catalog = visiblePluginsForOwner(owner, await this.api.listAll());
+      const catalog = visiblePluginsForOwner(owner, (await this.api.listAll()).plugins);
       requireSameMarketOwner(owner);
       const selected = catalog.find((plugin) => plugin.id === pluginId);
       if (!selected) {
@@ -675,7 +700,7 @@ export class PluginMarketService {
     let serverKnown = knownServerPlugins !== undefined;
     if (!serverKnown && getClientEndpoint('pluginApiBaseUrl')) {
       try {
-        serverPlugins = visiblePluginsForOwner(owner, await this.api.listAll());
+        serverPlugins = visiblePluginsForOwner(owner, (await this.api.listAll()).plugins);
         serverKnown = true;
       } catch (error) {
         log.warn('market catalog unavailable while recomputing cross-source duplicates', {
@@ -1307,6 +1332,78 @@ export class PluginMarketService {
         if (!stillInstalled) ledger.markRemoved(record.ghostId, installSubject);
       });
     }
+  }
+
+  private async applyServerRemovals(
+    removals: readonly PluginRemovalNotice[],
+    owner: ActiveAppSession,
+    ledger: PluginMarketLedger,
+  ): Promise<void> {
+    const removedNames: Array<string | null> = [];
+    for (const removal of removals) {
+      try {
+        const removed = await this.withMutation(removal.pluginId, async () => {
+          requireSameMarketOwner(owner);
+          const record = ledger.installationForGhost(removal.ghostId);
+          const skip = (reason: string): undefined => {
+            log.info('server plugin removal skipped', {
+              pluginId: removal.pluginId,
+              ghostId: removal.ghostId,
+              reason,
+            });
+            return undefined;
+          };
+          if (!record) return skip('ledger-record-missing');
+          if (record.pluginId !== removal.pluginId) return skip('plugin-id-mismatch');
+          if (record.source !== 'market' && record.source !== 'legacy-adopted') {
+            return skip('non-server-source');
+          }
+          if (!record.installed) return skip('already-not-installed');
+          if (record.scope !== 'organization') return skip('non-organization-scope');
+
+          switch (removal.action) {
+            case 'purge':
+              break;
+            default:
+              return skip('unsupported-action');
+          }
+
+          const installed = getGhostManager()
+            .list()
+            .find((ghost) => ghost.manifest.id === removal.ghostId);
+          if (!installed) return skip('runtime-not-installed');
+
+          await uninstallGhostAndCleanup(record.ghostId, { skipMarketLedger: true });
+          await this.withCapturedLedgerMutation(ledger, () => {
+            ledger.markRemoved(record.ghostId, null, {
+              recordDefaultInstallOptOut: false,
+            });
+          });
+          log.info('server plugin removal applied', {
+            pluginId: removal.pluginId,
+            ghostId: removal.ghostId,
+          });
+          return {
+            name: stripDirectionalControls(installed.manifest.name).slice(0, 200) || null,
+          };
+        });
+        if (removed) removedNames.push(removed.name);
+      } catch (error) {
+        log.error('server plugin removal failed', {
+          pluginId: removal.pluginId,
+          ghostId: removal.ghostId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    if (removedNames.length === 0) return;
+    const key = `${owner.mode}:${owner.dataOwnerId}`;
+    const pending = this.pendingRemovalNotices.get(key);
+    const count = (pending?.count ?? 0) + removedNames.length;
+    this.pendingRemovalNotices.set(key, {
+      count,
+      name: count === 1 ? (pending?.name ?? removedNames[0] ?? null) : null,
+    });
   }
 
   private async applyDefaultInstalls(

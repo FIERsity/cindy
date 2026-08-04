@@ -3203,6 +3203,10 @@
         "unavailable": "插件市场暂时不可用；已安装插件仍可正常管理和使用。",
         "authenticationRequired": "登录 Cindy 后才能查看插件市场。",
         "notConfigured": "当前环境未配置插件市场；已安装插件仍可正常管理和使用。",
+        "removalNotice": {
+          "single": "插件“{{name}}”已被组织移除，本机副本与数据已清理",
+          "multiple": "{{count}} 个插件已被组织移除，本机副本与数据已清理"
+        },
         "errors": {
           "generic": "插件市场操作失败，请重试。",
           "invalidRequest": "插件请求无效。",

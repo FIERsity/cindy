@@ -3204,6 +3204,10 @@
         "unavailable": "The plugin market is temporarily unavailable. Installed plugins remain available.",
         "authenticationRequired": "Sign in to Cindy to view the plugin market.",
         "notConfigured": "The plugin market is not configured for this environment. Installed plugins remain available.",
+        "removalNotice": {
+          "single": "The organization removed the plugin “{{name}}”. Its local copy and data on this device have been cleaned up.",
+          "multiple": "The organization removed {{count}} plugins. Their local copies and data on this device have been cleaned up."
+        },
         "errors": {
           "generic": "The plugin market operation failed. Please try again.",
           "invalidRequest": "The plugin request is invalid.",

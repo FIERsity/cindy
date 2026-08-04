@@ -228,7 +228,11 @@ export class PluginMarketLedger {
     this.write(data);
   }
 
-  markRemoved(ghostId: string, userId: string | null): void {
+  markRemoved(
+    ghostId: string,
+    userId: string | null,
+    options?: { recordDefaultInstallOptOut?: boolean },
+  ): void {
     const data = this.read();
     const record = data.installations[ghostId];
     if (!record) return;
@@ -237,7 +241,7 @@ export class PluginMarketLedger {
       installed: false,
       updatedAt: new Date().toISOString(),
     };
-    if (userId) {
+    if (userId && options?.recordDefaultInstallOptOut !== false) {
       data.defaultInstallOptOuts[userId] = [
         ...new Set([...(data.defaultInstallOptOuts[userId] ?? []), record.pluginId]),
       ];
