@@ -3206,7 +3206,8 @@
         "notConfigured": "The plugin market is not configured for this environment. Installed plugins remain available.",
         "removalNotice": {
           "single": "The organization removed the plugin “{{name}}”. Its local copy and data on this device have been cleaned up.",
-          "multiple": "The organization removed {{count}} plugins. Their local copies and data on this device have been cleaned up."
+          "multiple_one": "The organization removed {{count}} plugin. Its local copy and data on this device have been cleaned up.",
+          "multiple_other": "The organization removed {{count}} plugins. Their local copies and data on this device have been cleaned up."
         },
         "errors": {
           "generic": "The plugin market operation failed. Please try again.",
