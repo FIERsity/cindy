@@ -33,6 +33,10 @@ import {
   normalizeWorkflowProgressEntries,
   type WorkflowProgressEntry,
 } from '@cindy/maker-shared/agent-task';
+import {
+  isProductTurnDoneEvent,
+  isTurnContinuationBoundaryEvent,
+} from '@cindy/maker-shared/turn-continuation';
 import { normalizeAutoTitle } from '@cindy/maker-shared/session-title';
 import type { MessageRole, Message, MessageAutomationOrigin } from '@/lib/ccAgent.types';
 import type { AttachedFile, MentionedResource, SerializedAttachedFile } from '@/lib/fileTypes';
@@ -2725,6 +2729,23 @@ export function handleStreamEvent(
       if ((event.data as { silentStop?: boolean } | null | undefined)?.silentStop === true) {
         return state;
       }
+      if (isTurnContinuationBoundaryEvent(event)) {
+        // A claimed done seals one SDK turn, while its provider-owned
+        // continuation keeps the product turn alive. Finalize only the
+        // current assistant segment and preserve all product-level state.
+        const finalized = finalizeStreamingInState(state);
+        return {
+          ...finalized,
+          streamingText: '',
+          isStreaming: true,
+          lastAgentMeta: incomingMeta ?? state.lastAgentMeta,
+          agentStatus: {
+            ...state.agentStatus,
+            isRunning: true,
+            startedAt: state.agentStatus.startedAt ?? Date.now(),
+          },
+        };
+      }
       // F1-a: assistant 文本落库已收口 main(messagePersistBroadcaster 在 done 边界
       // flushAssistantBlock),renderer 这里只做 UI 收尾(finalize 在飞气泡)。
       const finalized = finalizeStreamingInState(state);
@@ -3348,6 +3369,11 @@ function handleStatusUpdate(
   state: SessionChatState,
   update: CCAgentStatusUpdate,
 ): SessionChatState {
+  if (isTurnContinuationBoundaryEvent(update) && update.isRunning === false) {
+    // The paired status(false) is only an SDK segment boundary. Keep the
+    // product turn running until its unclaimed terminal tail arrives.
+    return state;
+  }
   const startedAt = update.isRunning ? (state.agentStatus.startedAt ?? Date.now()) : null;
 
   // skipTurnReset: side-channel running 信号 (mivo MJ 按钮等不走 LLM 的后台任务)。
@@ -3473,6 +3499,7 @@ type MakerEventPayload = {
     data: unknown;
     source?: 'claude-code' | 'codex' | 'pi';
     agentMeta?: Record<string, unknown>;
+    turnContinuationId?: number;
   };
   persistId?: string;
   resolvedContent?: string;
@@ -3539,6 +3566,9 @@ function dispatchStreamEventPayload(
     data: event.data,
     source: event.source,
     agentMeta: event.agentMeta as import('./ccAgent.types').CcMeta | undefined,
+    ...(event.turnContinuationId !== undefined
+      ? { turnContinuationId: event.turnContinuationId }
+      : {}),
     persistId,
     resolvedContent,
   } as CCAgentStreamEvent;
@@ -3883,8 +3913,11 @@ function initGlobalListeners(): void {
       const update = {
         sessionId,
         ...(event.data as Record<string, unknown>),
+        ...(event.turnContinuationId !== undefined
+          ? { turnContinuationId: event.turnContinuationId }
+          : {}),
       } as CCAgentStatusUpdate;
-      if (!update.skipTurnReset && !update.isRunning) {
+      if (!isTurnContinuationBoundaryEvent(event) && !update.skipTurnReset && !update.isRunning) {
         supersedeInputProjectionRequests(sessionId, { supersedeOperations: true });
       }
       setState(sessionId, (s) => handleStatusUpdate(s, update));
@@ -4045,7 +4078,7 @@ function initGlobalListeners(): void {
     );
 
     // done / error 副作用 (从老 stream listener 搬过来)
-    if (event.type === 'done') {
+    if (isProductTurnDoneEvent(event)) {
       titleUpdateCallbacks.get(sessionId)?.();
       // A successful turn means auth recovered — reset the consecutive auth-retry
       // counter so a future 401 can auto-retry again.
@@ -5674,8 +5707,9 @@ function applyInputProjectionOperationResponse(
  */
 function supersedeInputProjectionOnTerminalEvent(
   sessionId: string,
-  event: Pick<CCAgentStreamEvent, 'type' | 'data'>,
+  event: Pick<CCAgentStreamEvent, 'type' | 'data' | 'turnContinuationId'>,
 ): void {
+  if (isTurnContinuationBoundaryEvent(event)) return;
   if (event.type === 'done') {
     if ((event.data as { silentStop?: boolean } | null | undefined)?.silentStop !== true) {
       supersedeInputProjectionRequests(sessionId, { supersedeOperations: true });
@@ -10123,7 +10157,7 @@ export const makerChatStore = {
   },
   /** Exposed for tests only: 把 status update 打进真实 store。 */
   __applyStatusUpdateForTest: (sessionId: string, update: CCAgentStatusUpdate): void => {
-    if (!update.skipTurnReset && !update.isRunning) {
+    if (!isTurnContinuationBoundaryEvent(update) && !update.skipTurnReset && !update.isRunning) {
       supersedeInputProjectionRequests(sessionId, { supersedeOperations: true });
     }
     setState(sessionId, (s) => handleStatusUpdate(s, update));

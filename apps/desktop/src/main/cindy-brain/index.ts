@@ -1396,7 +1396,14 @@ export function createGhostSessionTap(sessionId: string): {
       if (state === 'ineligible') return;
       pending.push({
         type: 'event',
-        event: { type: ev.type, data: ev.data, source: ev.source },
+        event: {
+          type: ev.type,
+          data: ev.data,
+          source: ev.source,
+          ...(ev.turnContinuationId !== undefined
+            ? { turnContinuationId: ev.turnContinuationId }
+            : {}),
+        },
       });
       kickResolve();
     },
