@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>#3520 统一选择器 rail 溢出修复 · 界面对比</title>
+<style>
+  /* ── 近似 Cindy 浅色主题 token(仅用于演示还原)────────────────────── */
+  :root {
+    --page-bg: #efece5;
+    --panel-bg: #fbfaf6;
+    --panel-border: #dedbd2;
+    --hairline: #e6e3da;
+    --text: #2d2b27;
+    --text-tertiary: #a39f94;
+    --badge-bg: #f1efe8;
+    --badge-fg: #55524a;
+    --hover-row: #eeece4;
+    --active-chip: #33312a;
+    --chip-fg: #faf9f4;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "PingFang SC", "Segoe UI", sans-serif;
+    background: var(--page-bg);
+    color: var(--text);
+    padding: 28px 30px;
+    font-size: 13px;
+  }
+  h1 { font-size: 15px; margin-bottom: 4px; }
+  .sub { color: var(--text-tertiary); font-size: 12px; margin-bottom: 22px; }
+  .row { display: flex; gap: 26px; align-items: flex-start; }
+  .case { width: 380px; }
+  .tag {
+    display: block; font-size: 12px; margin-bottom: 8px; line-height: 1.45;
+    color: var(--text); font-weight: 600;
+  }
+  .tag small { color: var(--text-tertiary); font-weight: 400; }
+
+  /* ── 统一面板骨架(ModelSelector.tsx:2756 / UnifiedModelPanel / UnifiedModelRail 同构)
+        面板高度故意钳到 300px,来源格位共 9 个(合计 >300px 触发超高)────────── */
+  .panel {
+    height: 300px;
+    background: var(--panel-bg);
+    border: 1px solid var(--panel-border);
+    border-radius: 12px;
+    display: flex;
+    flex-direction: column;
+    min-h: 0;
+    overflow: hidden;
+  }
+  .search {
+    flex-shrink: 0;
+    display: flex; align-items: center; gap: 8px;
+    padding: 11px 14px;
+    border-bottom: 1px solid var(--hairline);
+    color: var(--text-tertiary);
+  }
+  .mid { display: flex; min-height: 0; min-width: 0; flex: 1; }
+  .list-col { position: relative; display: flex; min-height: 0; min-width: 0; flex: 1; flex-direction: column; }
+  .models { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 8px 10px; }
+  .group-label { padding: 8px 8px 4px; color: var(--text-tertiary); font-size: 12px; }
+  .mrow {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding: 8px 10px; border-radius: 8px;
+  }
+  .mrow:hover, .mrow.sel { background: var(--hover-row); }
+  .mrow .name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .eff { color: var(--text-tertiary); font-size: 12px; flex-shrink: 0; }
+  .dotmark {
+    width: 22px; height: 22px; border-radius: 50%; flex-shrink: 0;
+    background: var(--badge-bg); color: var(--badge-fg);
+    display: inline-flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 12px; margin-right: 8px;
+  }
+  .footer {
+    flex-shrink: 0;
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding: 9px 14px;
+    border-top: 1px solid var(--hairline);
+    color: var(--text-tertiary); font-size: 12.5px;
+  }
+  .footer .add { display: flex; align-items: center; gap: 6px; }
+
+  /* ── rail(48px;34px 格位;格间 2px;侧距 6px;右缘 1px 分隔线)────────── */
+  .rail {
+    width: 48px;
+    flex-shrink: 0;
+    display: flex; flex-direction: column; align-items: center; gap: 2px;
+    border-right: 1px solid var(--hairline);
+    padding: 8px 6px;
+  }
+  .rail-btn {
+    width: 34px; height: 34px; border-radius: 9px; flex-shrink: 0;
+    border: none; background: none; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--text-tertiary);
+  }
+  .rail-btn:hover { background: var(--hover-row); }
+  .rail-btn.active { background: var(--active-chip); color: var(--chip-fg); }
+  .rail-sep { width: 22px; border-top: 1px solid var(--hairline); margin: 3px 0; flex-shrink: 0; }
+
+  /* ── 三种变体 ──────────────────────────────────────────── */
+  /* A 修复前:根节点无 min-h-0 / overflow —— 子项按 visible 向下绘制,叠压 footer(#3516) */
+  .before-fix .rail { min-height: auto; overflow: visible; }
+
+  /* B 修复后:min-h-0 + overflow-y-auto + overscroll-contain + scrollbar-hide(PR 提交态) */
+  .after-fix .rail {
+    min-height: 0; overflow-y: auto; overscroll-behavior-y: contain;
+    -ms-overflow-style: none; scrollbar-width: none;
+  }
+  .after-fix .rail::-webkit-scrollbar { display: none; }
+
+  /* C 反例:同样式但保留原生滚动条槽 —— Windows 非 overlay 下 12px 槽挤掉格位(review P2) */
+  .native-gutter .rail {
+    min-height: 0; overflow-y: auto; overscroll-behavior-y: contain;
+  }
+  /* 显式样式化 ::-webkit-scrollbar 会把 Chromium 从 overlay 切到占布局的经典模式,
+     等效于 Windows 非 overlay 环境:48px 内容区被扣掉 12px。 */
+  .native-gutter .rail::-webkit-scrollbar {
+    width: 12px;
+  }
+  .native-gutter .rail::-webkit-scrollbar-track {
+    background: repeating-linear-gradient(45deg, #ddd9ce 0 4px, #efece3 4px 8px);
+  }
+  .native-gutter .rail::-webkit-scrollbar-thumb {
+    background: #8f8c82; border-radius: 6px;
+    border: 2px solid transparent; background-clip: padding-box;
+  }
+  /* 标出被挤压的 34px 格位(仅反例用,红虚线便于一眼看出溢出方向) */
+  .native-gutter .rail-btn { outline: 1px dashed rgba(178, 74, 58, 0.55); outline-offset: -1px; }
+
+  svg { display: block; }
+</style>
+</head>
+<body>
+<h1>统一模型选择器 · 左侧 rail 超高处理(#3520,对应 issue #3516)</h1>
+<div class="sub">面板骨架与类名按 main 源码复刻(48px rail / 34px 格位圆角 9 / 1px hairline / footer「添加模型」)。面板高度固定 300px,放入 ★ + 全部 + 8 个自定义来源,格位总高必然超高。</div>
+
+<div class="row">
+  <!-- A -->
+  <div class="case before-fix">
+    <span class="tag">A · 修复前(#3516)<small> · rail 无纵向约束 → 格位溢出叠压「添加模型」</small></span>
+    <div class="panel">
+      <div class="search">🔍<span style="flex:1">搜索模型…</span></div>
+      <div class="mid">
+        <div class="rail" id="rail-a"></div>
+        <div class="list-col"><div class="models" id="list"></div></div>
+      </div>
+      <div class="footer"><span class="add">➕ 添加模型</span><span>尝试样式B&nbsp;&nbsp;切回老版</span></div>
+    </div>
+  </div>
+
+  <!-- B -->
+  <div class="case after-fix">
+    <span class="tag">B · 修复后(PR 提交态)<small> · min-h-0 + overflow-y-auto + scrollbar-hide → 栏内滚动,footer 干净</small></span>
+    <div class="panel">
+      <div class="search">🔍<span style="flex:1">搜索模型…</span></div>
+      <div class="mid">
+        <div class="rail" id="rail-b"></div>
+        <div class="list-col"><div class="models" id="list-b"></div></div>
+      </div>
+      <div class="footer"><span class="add">➕ 添加模型</span><span>尝试样式B&nbsp;&nbsp;切回老版</span></div>
+    </div>
+  </div>
+
+  <!-- C -->
+  <div class="case native-gutter">
+    <span class="tag">C · 反例(P2,已规避)<small> · 若不藏原生槽,Windows 12px 滚动条把 34px 格位挤变形</small></span>
+    <div class="panel">
+      <div class="search">🔍<span style="flex:1">搜索模型…</span></div>
+      <div class="mid">
+        <div class="rail" id="rail-c"></div>
+        <div class="list-col"><div class="models" id="list-c"></div></div>
+      </div>
+      <div class="footer"><span class="add">➕ 添加模型</span><span>尝试样式B&nbsp;&nbsp;切回老版</span></div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // 屏幕阅读器兼容写法与源码一致:title/aria-label/data-rail-item。
+  const providers = ["qwen", "grok", "glm", "deepseek", "kimi", "mistral", "llama", "flux"];
+  const letter = (id) => id[0].toUpperCase();
+  const RAIL_ALL_SVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>';
+  const STAR_SVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26"/></svg>';
+
+  function railHTML() {
+    let out = `<button class="rail-btn" title="收藏" aria-label="收藏">${STAR_SVG}</button>`;
+    out += `<div class="rail-sep" aria-hidden="true"></div>`;
+    out += `<button class="rail-btn active" title="全部" aria-label="全部">${RAIL_ALL_SVG}</button>`;
+    for (const p of providers) {
+      out += `<button class="rail-btn" title="${p}" aria-label="${p}" data-rail-item="provider:${p}"><span class="dotmark" style="margin-right:0">${letter(p)}</span></button>`;
+    }
+    return out;
+  }
+  function modelsHTML(withGroup) {
+    let out = "";
+    if (withGroup) out += `<div class="group-label">内置目录</div>`;
+    out += `<div class="mrow"><span class="dotmark">G</span><span class="name">GLM-5.3</span><span class="eff">▙ 高</span></div>`;
+    out += `<div class="mrow sel"><span class="dotmark">G</span><span class="name">GLM-5.3-Flash</span><span class="eff">▙ 高</span></div>`;
+    return out;
+  }
+  document.getElementById("rail-a").innerHTML = railHTML();
+  document.getElementById("rail-b").innerHTML = railHTML();
+  document.getElementById("rail-c").innerHTML = railHTML();
+  document.getElementById("list").innerHTML = modelsHTML(true);
+  document.getElementById("list-b").innerHTML = modelsHTML(true);
+  document.getElementById("list-c").innerHTML = modelsHTML(true);
+  // 让 B/C 与真实状态一致:默认停在「全部」视图。
+</script>
+</body>
+</html>
